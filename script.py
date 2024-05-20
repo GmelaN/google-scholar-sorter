@@ -2,63 +2,67 @@ import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import urllib
-
+import sys
+import argparse
 import time
 from tqdm import tqdm
 from random import randint
 from collections import namedtuple
 
+from tabulate import tabulate
 
-Paper = namedtuple("Paper", ["title", "link", "cites"])
-papers: list[Paper] = []
+def main(year_from, search_query, page_count):
+    Paper = namedtuple("Paper", ["title", "link", "cites"])
+    papers: list[Paper] = []
 
-base_url: str = "https://scholar.google.com/scholar?"
+    base_url: str = "https://scholar.google.com/scholar?"
 
-year_from: str = "2020"
-search_query: str = "superframe"
-# start: int = 0
+    for start in tqdm(range(0, page_count * 10, 10)):
+        params = {
+            "as_ylo": year_from,
+            "start": start,
+            "q": search_query
+        }
 
-for start in tqdm(range(0, 10, 10)):
-    params = {
-        "as_ylo": year_from,
-        "start": start,
-        "q": search_query
-    }
+        url = "{}{}".format(base_url, urllib.parse.urlencode(params))
+        response = requests.get(url)
+        bs = BeautifulSoup(response.text, "html.parser")
 
-    url = "{}{}".format(base_url, urllib.parse.urlencode(params))
-    # print(url)
+        paper_list = bs.findAll("div", {"class": "gs_or"})
+        
+        for paper in paper_list:
+            title = paper.find("h3").find("a").text
+            link = paper.find("h3").find("a").get("href")
+            cites_string = "".join(string.text for string in paper.findAll("div", {"class": "gs_fl"}))
+            cites = cites_string[cites_string.find("회") - 2 : cites_string.find("회") + 1].strip()
 
-    response: requests.Response = requests.get(url)
+            if len(cites) == 0:
+                continue
 
-    bs: BeautifulSoup = BeautifulSoup(response.text, "html.parser")
+            cites = int(cites[:-1])  # 회 문자 제거하고 숫자 변환
 
-    paper_list = bs.findAll("div", {"class": "gs_or"})
+            papers.append(Paper(title=title, link=link, cites=cites))
+            time.sleep(randint(1, 5) * 0.1)  # 요청 간의 간격
 
-    for i, paper in enumerate(paper_list):
-        title: str = paper.find("h3").find("a").text
-        link: str = paper.find("h3").find("a").get("href")
+    papers_sorted = sorted(papers, key=lambda x: -x.cites)
+    DATA_TABLE: tuple = tuple((paper.cites, paper.title, paper.link) for paper in papers_sorted)
 
-        cites_string: str = ""
-        for string in paper.findAll("div", {"class": "gs_fl"}):
-            cites_string += string.text
-        cites = cites_string[cites_string.find("회") - 2 : cites_string.find("회") + 1].strip()
+    # 결과를 CSV 파일과 표준 출력으로 저장
+    with open("./papers.csv", "w", encoding="utf8") as f:
+        f.write("cites, title, link\n")
 
-        if len(cites) == 0:
-            continue
-            # cites = "0회"
+        for paper in papers_sorted:
+            line = f"{paper.cites}, {paper.title}, {paper.link}\n"
+            f.write(line)
 
-        cites = int(cites[:-1])
+    print(tabulate(DATA_TABLE, headers=["cites", "title", "link"], tablefmt="grid"))  # 터미널에 출력
 
-        papers.append(Paper(title=title, link=link, cites=cites))
-        time.sleep(0.1 + randint(0, 5) * 0.1)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Search and save scholarly papers.")
+    parser.add_argument("from_", type=str, help="Year from which to begin the search")
+    parser.add_argument("query", type=str, help="Search query for the papers")
+    parser.add_argument("page", type=int, help="Number of pages to crawl (each page typically contains 10 items)")
 
-papers = sorted(papers, key=lambda x: -x.cites)
+    args = parser.parse_args()
 
-with open("./papers.csv", "w", encoding="utf8") as f:
-    f.write("cites, title, link\n")
-    for paper in papers:
-        f.write(str(paper.cites) + ', ')
-        f.write(paper.title + ', ')
-        f.write(paper.link)
-        f.write("\n")
+    main(args.from_, args.query, args.page)
